@@ -2,9 +2,15 @@ const Discord = require('discord.js');
 const {
     prefix,
     token,
+    youtubeApiKey
 } = require('./config.json');
 const ytdl = require('ytdl-core');
+const { YTSearcher } = require('ytsearcher');
 
+const searcher = new YTSearcher(youtubeApiKey);
+const opts = {
+    maxResults: 1,
+};
 
 const client = new Discord.Client();
 
@@ -60,18 +66,26 @@ async function enqueue(message, serverQueue) {
             "I need the permissions to join and speak in your voice channel!"
         );
     }
-    var songInfo = null;
+    var song = null;
 
     try {
-        songInfo = await ytdl.getInfo(args[1]);
+        if (validURL(args[1])) {
+            const songInfo = await ytdl.getInfo(args[1]);
+            song = {
+                title: songInfo.videoDetails.title,
+                url: songInfo.videoDetails.video_url,
+            }
+        } else {
+            const query = message.content.substr(message.content.indexOf(" ") + 1);
+            const result = await searcher.search(query, opts);
+            song = {
+                title: result.first.title,
+                url: result.first.url
+            };
+        }
     } catch (e) {
-        console.log(e);
-        return message.channel.send("Oops. I can't seem to find this song. You can always try copy pasting a link directly!");
+        return message.channel.send("Oops. I can't seem to find this song!");
     }
-    const song = {
-        title: songInfo.videoDetails.title,
-        url: songInfo.videoDetails.video_url,
-    };
 
     if (!serverQueue) {
         // Creating the contract for our queue
@@ -150,6 +164,16 @@ function stop(message, serverQueue) {
 
     serverQueue.songs = [];
     serverQueue.connection.dispatcher.end();
+}
+
+function validURL(str) {
+    var pattern = new RegExp('^(https?:\\/\\/)?' + // protocol
+        '((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|' + // domain name
+        '((\\d{1,3}\\.){3}\\d{1,3}))' + // OR ip (v4) address
+        '(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*' + // port and path
+        '(\\?[;&a-z\\d%_.~+=-]*)?' + // query string
+        '(\\#[-a-z\\d_]*)?$', 'i'); // fragment locator
+    return !!pattern.test(str);
 }
 
 
