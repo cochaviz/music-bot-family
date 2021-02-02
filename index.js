@@ -1,15 +1,12 @@
-var myArgs = process.argv.slice(2);
+require('dotenv').config()
 
+const youtubeApiKey = process.env.YOUTUBE
 const Discord = require('discord.js');
-const {
-    prefix,
-    youtubeApiKey
-} = require('./config.json');
-const token = myArgs[1];
 const ytdl = require('ytdl-core');
 const { YTSearcher } = require('ytsearcher');
 const { PassThrough } = require('stream');
 
+const { prefix } = require('./config.json');
 const searcher = new YTSearcher(youtubeApiKey);
 const opts = {
     maxResults: 1,
@@ -33,12 +30,19 @@ client.once('disconnect', () => {
 });
 
 
-client.on('message', function (message) {
+client.on('message', (message) => {
+    var hasMention = message.mentions.users.size > 0;
+    var isMentioned = hasMention && findInMap(message.mentions.users, client.user.id);
+    var notInSameChannel = message.guild.voice != null && message.member.voice.channel != message.guild.voice.channel;
+
+    // Don't listen to the message if it's not a command
+    if (!message.content.startsWith(prefix)) return;
     // Return if the command has not been sent in the proper channel, or a bot is the author
     if (message.author.bot || message.channel.name != 'hal-9000') return;
-    // Return if the client is already in a voice channel and that voice channel is not the voice channel of the sender or the client isn't mentioned in the message
-    if (message.guild.voice != null && message.member.voice.channel != message.guild.voice.channel && !findInMap(message.mentions.users, client.user.id)) return;
-    if (!message.content.startsWith(prefix)) return;
+    // Return if the message has a mention, but we're not mentioned
+    if (hasMention && !isMentioned) return;
+    // Join the channel if the bot is mentioned and they're not in the same channel
+    if (notInSameChannel && !hasMention) return;
 
     const serverQueue = queue.get(message.guild.id);
 
@@ -73,8 +77,10 @@ async function enqueue(message, serverQueue) {
         return message.channel.send("Please enter the name of the song, or a YouTube link!");
     }
     if (validURL(args[1])) {
-        const songInfo = await ytdl.getInfo(args[1]);
-
+        const songInfo = await ytdl.getInfo(args[1]).catch((e) => {
+            console.log("There seems to be something wrong with the current link", e);
+            return null
+        });
         if (!songInfo) {
             return message.channel.send("Sorry, I can't seem to find this song...");
         }
@@ -87,9 +93,11 @@ async function enqueue(message, serverQueue) {
         if (message.mentions != null) {
             query = query.substring(0, query.lastIndexOf(" "));
         }
-        const result = await searcher.search(query, opts);
-
-        if (!result.first) {
+        const result = await searcher.search(query, opts).catch((e) => {
+            console.log("An error occured while trying to search using the youtube API", e);
+            return null;
+        });
+        if (!result || !result.first) {
             return message.channel.send("Sorry, I can't seem to find this song...");
         }
         song = {
@@ -116,10 +124,10 @@ async function enqueue(message, serverQueue) {
 function play(guild, song) {
     const serverQueue = queue.get(guild.id);
 
-    if (!song || !serverQueue.playing) {
+    if (!song) {
         serverQueue.voiceChannel.leave();
         queue.delete(guild.id);
-        return;
+        return message.channel.send("There are no more songs in the queue! Bye!");
     }
 
     const dispatcher = serverQueue.connection
@@ -162,11 +170,15 @@ function pause(message, serverQueue) {
             "You have to be in a voice channel to stop the music!"
         );
 
-    if (!serverQueue || serverQueue.songs === [])
+    if (!serverQueue)
         return message.channel.send("There is no song that I could stop!");
+
+    if (!serverQueue.playing)
+        return message.channel.send("There doesn't seem to be a song playing!");
 
     serverQueue.playing = false;
     serverQueue.connection.dispatcher.pause();
+    return message.channel.send("Paused!");
 }
 
 function resume(message, serverQueue) {
@@ -175,11 +187,15 @@ function resume(message, serverQueue) {
             "You have to be in a voice channel to stop the music!"
         );
 
-    if (!serverQueue || serverQueue.songs === [])
-        return message.channel.send("There is no song that I could stop!");
+    if (!serverQueue || serverQueue.songs.length == 0)
+        return message.channel.send("There is no song that I could start!");
+
+    if (serverQueue.playing)
+        return message.channel.send("There doesn't seem to be a song that's currently playing");
 
     serverQueue.playing = true;
     serverQueue.connection.dispatcher.resume();
+    return message.channel.send(`Resumed playing **${serverQueue.songs[0].title}**`);
 }
 
 async function join(message, serverQueue) {
@@ -248,5 +264,15 @@ function findInMap(map, val) {
     }
     return false;
 }
+
+var myArgs = process.argv.slice(2);
+var token;
+
+if (myArgs[0] == 'A')
+    token = process.env.A;
+else if (myArgs[0] == 'B')
+    token = process.env.B;
+else
+    return;
 
 client.login(token);
