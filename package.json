@@ -1,0 +1,11 @@
+{
+    "name": "discord-music-family",
+    "version": "0.0.1",
+    "scripts": {
+        "start-all": "concurrently --kill-others \"npm run start-watch\" \"npm run wp-server\""
+    },
+    "dependencies": {
+        "discordjs": "",
+        "ytsearcher": ""
+    }
+}
