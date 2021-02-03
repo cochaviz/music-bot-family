@@ -7,6 +7,7 @@ const { YTSearcher } = require('ytsearcher');
 const { PassThrough } = require('stream');
 
 const { prefix } = require('./config.json');
+const { Http2ServerRequest } = require('http2');
 const searcher = new YTSearcher(youtubeApiKey);
 const opts = {
     maxResults: 1,
@@ -64,6 +65,9 @@ client.on('message', (message) => {
     } else if (message.content.startsWith(`${prefix}resume`)) {
         resume(message, serverQueue);
         return;
+    } else if (message.content.startsWith(`${prefix}list`)) {
+        list(message, serverQueue);
+        return;
     } else if (message.content.startsWith(`${prefix}leave`)) {
         leave(message);
         return;
@@ -118,7 +122,8 @@ async function enqueue(message, serverQueue) {
 
     if (!serverQueue.playing) {
         serverQueue.playing = true;
-        play(message.guild, serverQueue.songs[0]);
+        serverQueue.currentlyPlaying = serverQueue.songs[0];
+        play(message.guild, serverQueue.currentlyPlaying);
     } else {
         message.channel.send(`${song.title} has been added to the queue!`);
     }
@@ -139,7 +144,8 @@ function play(guild, song) {
         .play(ytdl(song.url))
         .on("finish", () => {
             serverQueue.songs.shift();
-            play(guild, serverQueue.songs[0]);
+            serverQueue.currentlyPlaying = serverQueue.songs[0];
+            play(guild, serverQueue.currentlyPlaying);
         })
         .on("error", error => console.error(error));
     dispatcher.setVolumeLogarithmic(serverQueue.volume / 5);
@@ -216,6 +222,21 @@ function resume(message, serverQueue) {
     }
 }
 
+function list(message, serverQueue) {
+    if (!serverQueue || serverQueue.songs.length == 0)
+        return message.channel.send("Ohno, we're out of music! Quick! Add something!");
+
+    var list = "";
+    list += `> Currently Playing: **${serverQueue.songs[0].title}**\n> \n`;
+    if (serverQueue.songs.length > 1) {
+        list += "> Queue:\n";
+        serverQueue.songs.forEach((song, i) => (i > 0) ? list += `> ${i} : **${song.title}**\n` : null);
+    } else {
+        list += "**So empty :disappointed:**";
+    }
+    message.channel.send(list);
+}
+
 async function join(message, serverQueue) {
     const voiceChannel = getVoiceChannel(message);
 
@@ -267,6 +288,7 @@ function help(message) {
         "/pause: Pause the music\n" +
         "/resume: Resume the music\n" +
         "/leave: Resume the music\n" +
+        "/list: Shows a list of the current queue\n" +
         "/help: Show this help\n\n" +
         "Example: /play https://www.youtube.com/watch?v=dQw4w9WgXcQ @music-senpai```"
     );
