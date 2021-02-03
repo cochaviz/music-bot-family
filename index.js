@@ -34,7 +34,7 @@ client.once('disconnect', () => {
 client.on('message', (message) => {
     var hasMention = message.mentions.users.size > 0;
     var isMentioned = hasMention && findInMap(message.mentions.users, client.user.id);
-    var notInSameChannel = message.guild.voice != null && message.member.voice.channel != message.guild.voice.channel;
+    var notInSameChannel = message.guild.voice == null || message.member.voice.channel != message.guild.voice.channel;
 
     // Don't listen to the message if it's not a command
     if (!message.content.startsWith(prefix)) return;
@@ -43,7 +43,7 @@ client.on('message', (message) => {
     // Return if the message has a mention, but we're not mentioned
     if (hasMention && !isMentioned) return;
     // Join the channel if the bot is mentioned and they're not in the same channel
-    if (notInSameChannel && !hasMention && !isMentioned) return;
+    if (notInSameChannel && !hasMention) return;
 
     const serverQueue = queue.get(message.guild.id);
 
@@ -122,8 +122,7 @@ async function enqueue(message, serverQueue) {
 
     if (!serverQueue.playing) {
         serverQueue.playing = true;
-        serverQueue.currentlyPlaying = serverQueue.songs[0];
-        play(message.guild, serverQueue.currentlyPlaying);
+        play(message.guild, serverQueue.songs[0]);
     } else {
         message.channel.send(`${song.title} has been added to the queue!`);
     }
@@ -144,8 +143,7 @@ function play(guild, song) {
         .play(ytdl(song.url))
         .on("finish", () => {
             serverQueue.songs.shift();
-            serverQueue.currentlyPlaying = serverQueue.songs[0];
-            play(guild, serverQueue.currentlyPlaying);
+            play(guild, serverQueue.songs[0]);
         })
         .on("error", error => console.error(error));
     dispatcher.setVolumeLogarithmic(serverQueue.volume / 5);
@@ -232,7 +230,7 @@ function list(message, serverQueue) {
         list += "> Queue:\n";
         serverQueue.songs.forEach((song, i) => (i > 0) ? list += `> ${i} : **${song.title}**\n` : null);
     } else {
-        list += "**So empty :disappointed:**";
+        list += "> **So empty :disappointed:**";
     }
     message.channel.send(list);
 }
@@ -241,24 +239,29 @@ async function join(message, serverQueue) {
     const voiceChannel = getVoiceChannel(message);
 
     if (!voiceChannel) return null;
-    if (serverQueue != null && serverQueue.voiceChannel === message.member.voice.channel) return serverQueue;
 
-    // Creating the contract for our queue
-    const queueContract = {
-        textChannel: message.channel,
-        voiceChannel: voiceChannel,
-        connection: null,
-        songs: [],
-        volume: 5,
-        playing: false,
-    };
-    // Setting the queue using our contract
-    queue.set(message.guild.id, queueContract);
+    if (serverQueue != null && serverQueue.voiceChannel == voiceChannel)
+        return serverQueue;
 
+    if (serverQueue == null) {
+        // Creating the contract for our queue
+        const queueContract = {
+            textChannel: message.channel,
+            voiceChannel: null,
+            connection: null,
+            songs: [],
+            volume: 5,
+            playing: false,
+        };
+        // Setting the queue using our contract
+        queue.set(message.guild.id, queueContract);
+        serverQueue = queueContract;
+    }
     try {
         // Here we try to join the voicechat and save our connection into our object.
+        serverQueue.voiceChannel = voiceChannel;
         var connection = await voiceChannel.join();
-        queueContract.connection = connection;
+        serverQueue.connection = connection;
     } catch (err) {
         // Printing the error message if the bot fails to join the voicechat
         console.log(err);
@@ -266,7 +269,7 @@ async function join(message, serverQueue) {
         message.channel.send(err);
         return null;
     }
-    return queueContract;
+    return serverQueue;
 }
 
 function leave(message) {
