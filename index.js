@@ -69,7 +69,7 @@ client.on('message', (message) => {
         list(message, serverQueue);
         return;
     } else if (message.content.startsWith(`${prefix}leave`)) {
-        leave(message);
+        leave(message, serverQueue);
         return;
     } else if (message.content.startsWith(`${prefix}help`)) {
         help(message);
@@ -84,12 +84,13 @@ async function enqueue(message, serverQueue) {
     var song = null;
 
     if (args[1] == null) {
-        return message.channel.send("Please enter the name of the song, or a YouTube link!");
+        return message.channel.send("Please enter the name of the song, or a valid YouTube link!");
     } else if (validURL(args[1])) {
         const songInfo = await ytdl.getInfo(args[1]).catch((e) => {
             console.log("There seems to be something wrong with the current link", e);
+            return message.channel.send(`Something went wrong when trying to load the video...`);
             return null
-        });
+        }).then((response) => (response.player_response.playabilityStatus.status === "OK") ? response : null);
         if (!songInfo) {
             return message.channel.send("Sorry, I can't seem to find this song...");
         }
@@ -124,7 +125,7 @@ async function enqueue(message, serverQueue) {
         serverQueue.playing = true;
         play(message.guild, serverQueue.songs[0]);
     } else {
-        message.channel.send(`${song.title} has been added to the queue!`);
+        message.channel.send(`> ${song.title} has been added to the queue!`);
     }
     return;
 }
@@ -133,21 +134,59 @@ async function enqueue(message, serverQueue) {
 function play(guild, song) {
     const serverQueue = queue.get(guild.id);
 
-    if (!song) {
-        serverQueue.voiceChannel.leave();
-        queue.delete(guild.id);
-        return serverQueue.textChannel.send("There are no more songs in the queue! Bye!");
+    if (!serverQueue.playing) {
+        serverQueue.textChannel.send("> I stopped playing!");
+        console.log("Called play, while it shouldn't be playing");
+        return;
     }
+    if (!song) {
+        queue.delete(guild.id);
+        serverQueue.textChannel.send("> There are no more songs in the queue!");
+        console.log("Empty queue");
+        return disconnect(guild, serverQueue);
+    }
+    var songFile = null;
 
+    try {
+        songFile = ytdl(song.url);
+    } catch (e) {
+        serverQueue.textChannel.send(`There seems to have gone something wrong when playing ${song.title}, you can maybe try giving me a link! (Watch out that some videos might be monitored, which means I can't download them!)`);
+        serverQueue.songs.shift();
+        return play(guild, serverQueue.songs[0]);
+    }
     const dispatcher = serverQueue.connection
-        .play(ytdl(song.url))
+        .play(songFile)
         .on("finish", () => {
             serverQueue.songs.shift();
             play(guild, serverQueue.songs[0]);
         })
         .on("error", error => console.error(error));
     dispatcher.setVolumeLogarithmic(serverQueue.volume / 5);
-    serverQueue.textChannel.send(`Start playing: **${song.title}**`);
+    serverQueue.textChannel.send(`> Started playing: **${song.title}**`);
+}
+
+function leave(message, serverQueue) {
+    if (!serverQueue)
+        return message.channel.send("I don't seem to be in a channel currently, add me to one by using `/join`!")
+
+    disconnect(message.guild, serverQueue);
+}
+
+function disconnect(guild, serverQueue) {
+    try {
+        serverQueue.playing = false;
+        serverQueue.textChannel.send("> All right, see you later!");
+    } catch (e) {
+        console.log(`Something went wrong while trying to leave the channel fully: ${e}`);
+    } finally {
+        if (serverQueue.connection)
+            serverQueue.connection.disconnect();
+
+        console.log(`Leaving channel ${serverQueue.voiceChannel}`)
+
+        serverQueue.connection = null;
+        serverQueue.voiceChannel = null;
+    }
 }
 
 function skip(message, serverQueue) {
@@ -158,6 +197,7 @@ function skip(message, serverQueue) {
     if (!serverQueue)
         return message.channel.send("There is no song that I could skip!");
     serverQueue.connection.dispatcher.end();
+    console.log("Skipped song");
 }
 
 function stop(message, serverQueue) {
@@ -170,18 +210,18 @@ function stop(message, serverQueue) {
         return message.channel.send("There is no song that I could stop!");
 
     try {
-        serverQueue.connection.dispatcher.end();
+        serverQueue.songs = [];
+        return serverQueue.connection.dispatcher.end();
     } catch (e) {
-        return message.channel.send("Something went wrong while trying to stop playing, ask an admin!");
-    } finally {
-        leave(message);
+        message.channel.send("Something went wrong while trying to stop playing, ask an admin!");
+        return disconnect(message.guild, serverQueue);
     }
 }
 
 function pause(message, serverQueue) {
     if (!message.member.voice.channel)
         return message.channel.send(
-            "You have to be in a voice channel to stop the music!"
+            "You have to be in a voice channel to control the music!"
         );
 
     if (!serverQueue)
@@ -193,7 +233,7 @@ function pause(message, serverQueue) {
     try {
         serverQueue.playing = false;
         serverQueue.connection.dispatcher.pause();
-        return message.channel.send("Paused!");
+        return message.channel.send("> **Paused!**");
     } catch (e) {
         return message.channel.send("Something went wrong while trying to resume the music. Try adding songs to the playlist!");
     }
@@ -202,7 +242,7 @@ function pause(message, serverQueue) {
 function resume(message, serverQueue) {
     if (!message.member.voice.channel)
         return message.channel.send(
-            "You have to be in a voice channel to stop the music!"
+            "You have to be in a voice channel to control the music"
         );
 
     if (!serverQueue || serverQueue.songs.length == 0)
@@ -213,15 +253,22 @@ function resume(message, serverQueue) {
 
     try {
         serverQueue.playing = true;
-        serverQueue.connection.dispatcher.resume();
-        return message.channel.send(`Resumed playing **${serverQueue.songs[0].title}**`);
+
+        if (serverQueue.connection.dispatcher) {
+            serverQueue.connection.dispatcher.resume();
+            message.channel.send(`> Resumed playing: **${serverQueue.songs[0].title}**`);
+        } else {
+            play(message.guild, serverQueue.songs[0]);
+        }
     } catch (e) {
         return message.channel.send("Something went wrong while trying to resume the music. Try adding songs to the playlist!");
     }
 }
 
 function list(message, serverQueue) {
-    if (!serverQueue || serverQueue.songs.length == 0)
+    if (!serverQueue)
+        return message.channel.send("I don't seem to be connected to a voice channel, add me to one using `/join`");
+    if (serverQueue.songs.length == 0)
         return message.channel.send("Ohno, we're out of music! Quick! Add something!");
 
     var list = "";
@@ -238,7 +285,7 @@ function list(message, serverQueue) {
 async function join(message, serverQueue) {
     const voiceChannel = getVoiceChannel(message);
 
-    if (!voiceChannel) return null;
+    if (!voiceChannel) return;
 
     if (serverQueue != null && serverQueue.voiceChannel == voiceChannel)
         return serverQueue;
@@ -272,11 +319,6 @@ async function join(message, serverQueue) {
     return serverQueue;
 }
 
-function leave(message) {
-    const voiceChannel = getVoiceChannel(message);
-    voiceChannel.leave();
-}
-
 function help(message) {
     message.channel.send(
         "```Hey! I'm a music bot with a bunch of features!\n\n" +
@@ -288,6 +330,7 @@ function help(message) {
         "/play: Add a song to the queue, and play if it's not already\n" +
         "/stop: Stop and delete the queue\n" +
         "/skip: Skip the current track\n" +
+        "leave: I'll leave your channel! But don't worry, I'll remember the songs in the queue :)\n" +
         "/pause: Pause the music\n" +
         "/resume: Resume the music\n" +
         "/leave: Resume the music\n" +
@@ -323,9 +366,9 @@ function validURL(str) {
     return !!pattern.test(str);
 }
 
-function findInMap(map, val) {
-    for (let [k, v] of map) {
-        if (v.id === val) {
+function findInMap(users, bot_id) {
+    for (let [_, user] of users) {
+        if (user.id === bot_id) {
             return true;
         }
     }
